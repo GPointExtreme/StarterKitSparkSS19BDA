@@ -38,33 +38,80 @@ public class MovieRecommendation {
 		WinConfig.setupEnv();
 
 		// 1) Spark Context Init
-
+		
+		SparkConf cnf = new SparkConf().setMaster("local[2]")
+				.setAppName(MovieRecommendation.class.getName())
+				.set("spark.executor.memory", "2g");
+		
+		SparkSession spark = SparkSession.builder()
+				.config(cnf)
+				.getOrCreate();
 		
 		// 2) read all ratings data
-
+		
+		Dataset<MovieRating> ratings = spark.read()
+				.text(BASE_PATH_TO_INPUT_RATINGS)
+				.as(Encoders.STRING())
+				.map(MovieRating::parseRating,Encoders.bean(MovieRating.class))
+				.cache();
 		
 		// 3) read all movie data
-
+		
+		Dataset<MovieTitle> movies = spark.read()
+				.text(BASE_PATH_TO_INPUT_MOVIES)
+				.as(Encoders.STRING())
+				.map(MovieTitle::parseColonsFormat,Encoders.bean(MovieTitle.class))
+				.cache();
 		
 		// 4) split ratings data into 90% training, 10% test
+		
+		Dataset<MovieRating>[] splits = ratings
+				.randomSplit(new double[]{0.9,0.1},1234L);
+		Dataset<MovieRating> trainingData = splits[0].cache();
+		Dataset<MovieRating> testSet= splits[1].cache();
 
 		
 		// 5) Build the recommendation model using ALS on the training data
-
+		
+		ALS als = new ALS()
+				.setRank(8)
+				.setMaxIter(10)
+				.setRegParam(0.1)
+				.setUserCol("userId")
+				.setItemCol("movieId")
+				.setRatingCol("rating")
+				.setColdStartStrategy("drop");
+		
+		ALSModel model = als.fit(trainingData);
 		
 		// 10) (skip this till the end) tune the model using the method for 9) see below 
 		// then assign the model to the best based on hyper param tuning
-
+		
+		tuneALSModel(ratings);
 		
 		// 6) make predictions for testData
-
+		
+		model.setColdStartStrategy("drop");
+		Dataset<Row> predictions= model.transform(testSet);
 
 		// 7) Evaluate the model by computing the RMSE on the test data
-
+		
+		RegressionEvaluator evaluator = new RegressionEvaluator()
+				.setMetricName("rmse")
+				.setLabelCol("rating")
+				.setPredictionCol("prediction");
+		
+		Double rmse = evaluator.evaluate(predictions);
+		System.out.println("Root-mean-square error = " + rmse);
 		
 		// 8) make personalized recommendations by
 		// getting top n movies for specific userId
 		
+		Integer[] userIds= {456,234,101,23};
+		Dataset<Row> topMovies= getTopNMovieRecommendations(ratings,
+				movies, model, userIds, 10);
+		
+		topMovies.show(false);
 		
 	}
 
